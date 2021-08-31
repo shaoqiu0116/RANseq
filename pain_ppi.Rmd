@@ -1,0 +1,231 @@
+---
+title: An R Markdown document converted from "/content/pain_ppi.ipynb"
+output: html_document
+---
+
+## Import
+
+```{r}
+install.packages(c("ggraph", "ggsci", "here", "igraph", "plotly", "tidygraph", "tidyverse"))
+```
+
+```{r}
+# draw graph with igraph
+library(ggraph)
+library(ggsci)
+library(here)
+library(igraph)  # make network graph, caculate metrics
+library(plotly)
+library(RColorBrewer)
+library(readxl)
+library(tidygraph)
+library(tidyverse)  # tidyverse to manipulate data
+# for building network and visualization already included in tidygraph
+```
+
+## Read data
+
+```{r}
+filename <- here()
+```
+
+```{r}
+# read the excel datasheet and store diffrent sheet data to the data.frame
+ppi_df <- read_csv(here(filename, "Pain PPIs.csv"), col_names = c("Key",
+    "From", "Type", "To"), skip = 1)
+```
+
+```{r}
+head(ppi_df)
+# inspect head 6 rows of data
+```
+
+```{r}
+degs_df <- read_excel(here(filename, "CTLCCI_DEG_PEP5.xlsx"), sheet = "Sheet 1", col_names = c("Gene", "P_value",
+    "LogFC"), skip = 1)
+degs_df <- degs_df %>%
+    mutate(Gene = str_to_upper(Gene))
+head(degs_df)
+```
+
+```{r}
+degs_df <- read_delim(here(filename, "Cluster_CCI-ind3_ConserMarker.txt"), col_names = c("Gene", "P_value",
+    "LogFC"),skip = 1)
+degs_df <- degs_df %>% select(c(1:3)) %>% 
+    mutate(Gene = str_to_upper(Gene))
+head(degs_df)
+```
+
+```{r}
+select <- (ppi_df$From %in% degs_df$Gene) | ppi_df$To %in% degs_df$Gene
+ppi_df[select, ]
+```
+
+## Network metrics
+
+```{r}
+eg <- graph.data.frame(ppi_df[select, c(2, 4)], directed = TRUE)
+# initialize the graph with igraph graph.data.frame() function, undirected
+# graph
+class(eg)
+# inspect the eg graph
+eg
+```
+
+```{r}
+diameter(eg)  # show the diameter of the graph
+```
+
+```{r}
+edge_density(eg)  # show the density of the graph
+```
+
+```{r}
+data.frame(degree(eg)) %>%
+    arrange(-degree.eg.) %>%
+    head(10)
+data.frame(degree(eg)) %>%
+    arrange(-degree.eg.) %>%
+    tail(10)
+# show the 3 nodes with most and least degree centrality
+```
+
+```{r}
+data.frame(closeness(eg)) %>%
+    arrange(-closeness.eg.) %>%
+    head(10)
+data.frame(closeness(eg)) %>%
+    arrange(-closeness.eg.) %>%
+    tail(10)
+# show the 3 nodes with most and least closeness centrality
+```
+
+```{r}
+data.frame(betweenness(eg)) %>%
+    arrange(-betweenness.eg.) %>%
+    head(10)
+data.frame(betweenness(eg)) %>%
+    arrange(-betweenness.eg.) %>%
+    tail(10)
+# show the 5 nodes with most and least betweenness centrality
+```
+
+```{r}
+data.frame(eigen_centrality(eg)$vector) %>%
+    arrange(-eigen_centrality.eg..vector) %>%
+    head(10)
+data.frame(eigen_centrality(eg)$vector) %>%
+    arrange(-eigen_centrality.eg..vector) %>%
+    tail(10)
+# show the 5 nodes with most and least eigen centrality
+```
+
+## Basic circular network
+
+```{r}
+degs_df$Expression <- if_else(degs_df$LogFC <=0, "Down Regulation", "Up Regulation")
+head(degs_df)
+```
+
+```{r}
+deg_expression <- ppi_df[select, ] %>% left_join(degs_df, by=c("From" ="Gene")) %>% select(c(7))
+deg_expression$Expression <- deg_expression$Expression %>% replace_na("No Chage")
+
+head(deg_expression)
+```
+
+```{r}
+# create nodes data
+nodes <- data.frame(V = unique(c(ppi_df[select, ]$From, ppi_df[select, ]$To)), stringsAsFactors = F)
+# create edges data
+edges <- ppi_df[select, c(2, 4)]
+# after that, we can simply create graph dataframe using `graph_from_data_frame`
+# function from `igraph` package.
+network_ego <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE) %>% 
+    as_tbl_graph()
+```
+
+```{r}
+E(network_ego)$Interaction <- as.character(ppi_df[select, ]$Type)
+V(network_ego)$Expression <- as.character(deg_expression$Expression)
+```
+
+```{r}
+set.seed(101)
+network_ego1 <- network_ego %>%
+    mutate(community = as.factor(group_infomap())) %>%
+    mutate(degree_c = centrality_degree()) %>%
+    mutate(closeness_c = centrality_closeness(normalized = T)) %>%
+    mutate(eigen = centrality_eigen(directed = F))
+# group_louvain, group_infomap, group_optimal group_spinglass,
+# group_edge_betweenness
+```
+
+```{r}
+network_ego1
+```
+
+```{r}
+network_ego1 %>%
+    mutate(node_size = degree_c * 0.1) %>%
+    ggraph(layout = "kk") + geom_edge_fan(alpha = 0.1) + geom_node_point(aes(size = node_size)) +
+    geom_node_label(aes(label = name), max.overlaps = 10, repel = T, show.legend = T) +
+    coord_fixed() + theme_graph() + theme(legend.position = "none") + labs(title = "Colored by roles")
+```
+
+```{r}
+network_ego1 %>%
+    mutate(node_size = ifelse(degree_c >= 5, degree_c, 0)) %>%
+    mutate(node_label = ifelse(degree_c >= 2, name, "")) %>%
+    ggraph(layout = "nicely") + geom_edge_hive(aes(colour = Interaction)) + geom_edge_fan(alpha = 0.05) +
+    geom_node_point(aes(color = Expression, size = node_size)) + geom_node_label(aes(label = node_label),
+    max.overlaps = 1000, repel = T, show.legend = T) + coord_fixed() + theme_graph() +
+    theme(legend.position = "right") + labs(title = "Pain PPI")
+```
+
+## Customize edge
+
+```{r}
+# Let's add information concerning the label we are going to add: angle,
+# horizontal adjustement and potential flip calculate the ANGLE of the labels
+nodes$id <- NA
+n_leaves <- length(V(network_ego1))
+print(n_leaves)
+nodes$id <- seq(1:n_leaves)
+nodes$angle <- 90 - 360 * nodes$id/n_leaves
+# calculate the alignment of labels: right or left If I am on the left part of
+# the plot, my labels have currently an angle < -90
+nodes$hjust <- ifelse(nodes$angle < -90, 1, 0)
+
+# flip angle BY to make them readable
+nodes$angle <- ifelse(nodes$angle < -90, nodes$angle + 180, nodes$angle)
+```
+
+```{r}
+network_ego1  %>%
+    mutate(node_size = ifelse(degree_c >= 5, degree_c, 0)) %>%
+    ggraph(layout = "linear", circular = TRUE) + geom_edge_arc(aes(colour = Interaction)) +
+    geom_edge_fan(alpha = 0.1) + geom_node_point(aes(colour = Expression, size = node_size,
+    x = x * 1.07, y = y * 1.07), alpha = 1) + scale_color_manual(values = c("blue",
+    "grey", "red")) + scale_size(range = c(1, 2.5)) + geom_node_text(aes(x = x * 1.15, y = y * 1.15, label = name,
+    angle = nodes$angle, hjust = nodes$hjust, colour = Expression), size = 2, alpha = 1) +
+    coord_fixed() + theme_graph() + theme(legend.position = "right", plot.margin = unit(c(0,
+    0, 0, 0), "cm"), ) + expand_limits(x = c(-1.3, 1.3), y = c(-1.3, 1.3)) + labs(title = "Pain PPI")
+```
+
+```{r}
+network_ego1  %>%
+    mutate(node_size = ifelse(degree_c >= 10, degree_c, 0)) %>%
+    ggraph(layout = "linear", circular = TRUE) + geom_edge_arc(aes(colour = Interaction)) +
+    geom_edge_fan(alpha = 0.1) + geom_node_point(aes(size = node_size,    x = x * 1.07, y = y * 1.07), alpha = 1) +   scale_size(range = c(1, 2.5)) + geom_node_text(aes(x = x * 1.15, y = y * 1.15, label = name,
+    angle = nodes$angle, hjust = nodes$hjust), size = 2, alpha = 1) +
+    coord_fixed() + theme_graph() + theme(legend.position = "right", plot.margin = unit(c(0,
+    0, 0, 0), "cm"), ) + expand_limits(x = c(-1.3, 1.3), y = c(-1.3, 1.3)) + labs(title = "Pain PPI")
+```
+
+```{r}
+ggsave(filename = "PPI.png", width = 6,
+    height = 6, units = "in",
+    dpi = 300)
+```
+
