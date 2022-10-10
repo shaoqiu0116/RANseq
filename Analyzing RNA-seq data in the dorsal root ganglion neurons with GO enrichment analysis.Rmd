@@ -1,0 +1,292 @@
+---
+title: An R Markdown document converted from "C:/Users/shaoq/OneDrive/PythonScripts/Tools/Analyzing
+  RNA-seq data in the dorsal root ganglion neurons with GO enrichment analysis.ipynb"
+output: html_document
+---
+
+### Import
+
+```{r}
+if (!requireNamespace("BiocManager")) install.packages("BiocManager")
+BiocManager::install(c("clusterProfiler", "DOSE", "GOplot", "enrichplot", "org.Mm.eg.db"))
+```
+
+```{r}
+.libPaths(c("C:/Program Files/R/R-4.1.2/library", .libPaths()))
+install.packages("devtools")
+devtools::install_github("GuangchuangYu/clusterProfiler")
+```
+
+```{r}
+install.packages(c("ggnewscale", "ggridges", "ggupset", "here"))
+```
+
+```{r}
+library(clusterProfiler)
+library(DOSE)
+library(enrichplot)
+library(ggnewscale)
+library(ggplot2)
+library(ggupset)
+library(GOplot)
+library(here)
+library(org.Mm.eg.db)
+library(tidyverse)
+```
+
+## Read data
+
+```{r}
+filename <- here()
+# d <- read_csv(here(filename, 'output/forGO_all_new.csv'))
+d <- read_csv(here(filename, "output/", "forGO_all_new_KO.csv"))
+colnames(d) <- c("SYMBOL", "LogFC")
+head(d)
+dim(d)
+```
+
+## Get ENTREZID
+
+```{r}
+# find entrzid for each gene
+ids <- mapIds(org.Mm.eg.db, keys = d$SYMBOL, keytype = "SYMBOL", column = "ENTREZID", fuzzy = TRUE,
+    multiVals = "first")
+length(ids)
+head(ids)
+```
+
+```{r}
+d$ENTREZID <- as.character(ids)
+d <- d %>%
+    arrange(ENTREZID)
+head(d)
+```
+
+## enrichGo analysis
+
+```{r}
+# enrichGo analysis for BP, MF, CC catafories
+ego_bp <- enrichGO(gene = d$ENTREZID, OrgDb = "org.Mm.eg.db", keyType = "ENTREZID",
+    ont = "BP", pvalueCutoff = 0.05, pAdjustMethod = "BH", qvalueCutoff = 0.05, minGSSize = 10,
+    maxGSSize = 500, readable = TRUE, pool = FALSE)
+ego_mf <- enrichGO(gene = d$ENTREZID, OrgDb = "org.Mm.eg.db", keyType = "ENTREZID",
+    ont = "MF", pvalueCutoff = 0.05, pAdjustMethod = "BH", qvalueCutoff = 0.05, minGSSize = 10,
+    maxGSSize = 500, readable = TRUE, pool = FALSE)
+ego_cc <- enrichGO(gene = d$ENTREZID, OrgDb = "org.Mm.eg.db", keyType = "ENTREZID",
+    ont = "CC", pvalueCutoff = 0.05, pAdjustMethod = "BH", qvalueCutoff = 0.05, minGSSize = 10,
+    maxGSSize = 500, readable = TRUE, pool = FALSE)
+```
+
+```{r}
+summary(ego_mf)
+```
+
+```{r}
+# test the barplot
+barplot(ego_mf, showCategory=20)
+```
+
+```{r}
+dotplot(ego_mf, showCategory = 25, label_format = 30)
+```
+
+```{r}
+# plot 3 catergories in one dotplot
+go <- enrichGO(d$ENTREZID, OrgDb = "org.Mm.eg.db", ont = "all",
+pvalueCutoff = 0.05, pAdjustMethod = "fdr", qvalueCutoff = 0.05)
+dotplot(go, split = "ONTOLOGY", showCategory = 6, label_format = 20) + facet_grid(ONTOLOGY ~
+    ., scale = "free")
+```
+
+```{r}
+## remove redundent GO terms
+cnetplot(ego_mf, foldChange=d$LogFC)
+```
+
+```{r}
+# upset plot
+upsetplot(ego_mf)
+```
+
+```{r}
+# KEGG go analysis with enrichKEGG
+edo2 <- enrichKEGG(d$ENTREZID, organism = "mmu",  minGSSize = 120, pvalueCutoff = 0.05)
+```
+
+```{r}
+summary(edo2)
+```
+
+## New dotplot
+
+```{r}
+# draw better dotplot with ggplot transform go analysis data to dataframe
+bp_go_df <- as_tibble(ego_bp)
+cc_go_df <- as_tibble(ego_cc)
+mf_go_df <- as_tibble(ego_mf)
+head(bp_go_df)
+dim(bp_go_df)
+head(cc_go_df)
+dim(cc_go_df)
+head(mf_go_df)
+dim(mf_go_df)
+```
+
+```{r}
+head(mf_go_df)
+```
+
+```{r}
+# select the top 25 terms
+data <- bp_go_df[, c(1, 2, 3, 6, 9)]
+colnames(data) <- c("Go", "Term", "Per", "p.adjust", "Count")
+dim(data)
+data <- data %>%
+    arrange(-Count) %>%
+    slice(c(1:25))
+head(data, 10)
+```
+
+```{r}
+data <- data %>%
+    separate(Per, into = c("Count", "Total"), sep = "\\/") %>% 
+    mutate(Count = as.numeric(Count),Total = as.numeric(Total), Per = Count/Total *100) %>% arrange(-Per)
+    # seperate the Per(string) to total counts(numeric) and counts(numeric) for each terms
+    # calculate the percentage
+head(data, 10)
+```
+
+```{r}
+# draw the dotplot, custermize
+S1 <- data %>%
+    arrange(Per) %>%
+    mutate(Term = factor(Term, levels = Term)) %>%
+    ggplot(aes(x = Per, y = Term)) + geom_point(aes(size = Count, color = p.adjust)) +
+    scale_size(range = c(1, 5)) + xlim(0.25, 3.75) + labs(x = "Gene Ratio", y = "") +
+    theme_bw() + theme(axis.text = element_text(size = 11))
+S1 <- S1 + scale_color_gradient(low = "red2", high = "mediumblue", space = "Lab")
+S1
+```
+
+```{r}
+# save the figure to png, specify the dpi and size of the pic
+ggsave(filename = "1.png", width = 7.5, height = 6, units = "in", dpi = 600)
+```
+
+## GOplot
+
+```{r}
+# cluster plot with GOplot package
+data(EC)
+head(EC$genelist)
+head(EC$david)
+# inspect the structure of the data in GOplot data
+```
+
+```{r}
+# save the GO analysis data from clusterProfiler
+# saved the data as stutured as the GOPlot data
+david <- read.csv("./go_david.csv", stringsAsFactors = TRUE)
+head(david)
+# select the top 10 term for the cluster plot
+```
+
+```{r}
+# select the the gene list with the exprssion data
+genelist <- read.csv("./genelist.csv", stringsAsFactors = TRUE)
+head(genelist)
+```
+
+```{r}
+# Generate the plotting object
+circ <- circle_dat(david, genelist)
+head(circ)
+```
+
+```{r}
+# Generate a simple barplot
+GOBar(subset(circ, category == "MF"))
+```
+
+```{r}
+# Generate the bubble plot with a label threshold of 3
+GOBubble(subset(circ, category == "MF"), labels = 3)
+```
+
+```{r}
+# Add a title, change the colour of the circles, facet the plot according to
+# the categories and change the label threshold
+GOBubble(circ, title = "Bubble plot", colour = c("orange", "darkred", "gold"), display = "multiple",
+    labels = 3)
+```
+
+```{r}
+# Reduce redundant terms with a gene overlap >= 0.75...
+reduced_circ <- reduce_overlap(circ, overlap = 0.75)
+# ...and plot it
+GOBubble(reduced_circ, labels = 2.8)
+```
+
+```{r}
+# Generate a circular visualization of the results of gene- annotation
+# enrichment analysis
+GOCircle(circ)
+```
+
+```{r}
+# select the genes appeared in the top 10 terms.
+# genes <- unique(scan('./mf_genes.txt', what = 'character'))
+genes <- unique(scan("./cc_genes.txt", what = "character"))
+# get the unique gene list
+length(genes)
+genes
+```
+
+```{r}
+# generat the genelist data with only the selected genes
+genes_data <- genelist %>%
+    filter(genelist$ID %in% genes) %>%
+    select(ID, logFC)
+genes_data <- genes_data %>%
+    mutate(ID = str_to_upper(ID))
+head(genes_data)
+```
+
+```{r}
+# select the top 10 process(term)
+process <- read_csv("./process_cc.csv")$Process
+process
+```
+
+```{r}
+# now it is time to generate the binary matrix
+chord <- chord_dat(data = circ, genes = genes_data, process = process)
+dim(chord)
+```
+
+```{r}
+# chord plot, or the cohort plot
+GOChord(chord, space = 0.02, gene.order = "logFC", gene.space = 0.1, gene.size = 3)
+```
+
+```{r}
+# cluster plot, set the space and witdth settings for terms and lfc, set the color
+GOCluster(circ, process, clust.by = "term", term.width = 2, lfc.width = 0.5, term.space = 0.25,
+    lfc.space = 0.25) + theme(legend.position = "top", legend.key.size = unit(0.5,
+    "cm"))
+```
+
+```{r}
+# cluster plot, set the space and witdth settings for terms and lfc, set the
+# color
+colors = c("#66C5CCFF", "#F6CF71FF", "#F89C74FF", "#DCB0F2FF", "#87C55FFF", "#9EB9F3FF",
+    "#FE88B1FF", "#C9DB74FF", "#8BE0A4FF", "#B497E7FF")
+GOCluster(circ, process, clust.by = "term", term.width = 2, lfc.width = 0.5, term.space = 0.25,
+    lfc.space = 0.25, term.col = colors) + theme(legend.position = "top", legend.key.size = unit(0.5,
+    "cm"))
+```
+
+```{r}
+ggsave(filename = "1.png", width = 12, height = 12, units = "in", dpi = 600)
+```
+
